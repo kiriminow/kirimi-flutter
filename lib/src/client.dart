@@ -11,7 +11,7 @@ import 'models.dart';
 /// final client = KirimiClient(userCode: 'USER', secret: 'SECRET');
 /// final resp = await client.sendMessage(
 ///   deviceId: 'DEV',
-///   phone: '628xxx',
+///   receiver: '628xxx',
 ///   message: 'halo',
 /// );
 /// client.close();
@@ -38,7 +38,7 @@ class KirimiClient {
   // Internal helpers
   // ---------------------------------------------------------------------------
 
-  Map<String, String> get _authFields => {
+  Map<String, dynamic> get _authFields => {
         'user_code': userCode,
         'secret': secret,
       };
@@ -48,7 +48,10 @@ class KirimiClient {
     Map<String, dynamic> body,
   ) async {
     final url = Uri.parse('$baseUrl$path');
-    final payload = {..._authFields, ...body};
+    final payload = <String, dynamic>{
+      ..._authFields,
+      ...body,
+    }..removeWhere((_, value) => value == null);
 
     try {
       final response = await _http
@@ -82,7 +85,11 @@ class KirimiClient {
       return KirimiResponse(success: true, data: body);
     }
 
-    final message = body is Map ? (body['message'] as String? ?? response.reasonPhrase ?? 'Unknown error') : response.reasonPhrase ?? 'Unknown error';
+    final message = body is Map
+        ? (body['message'] as String? ??
+            response.reasonPhrase ??
+            'Unknown error')
+        : response.reasonPhrase ?? 'Unknown error';
     throw KirimiApiException(response.statusCode, message, responseData: body);
   }
 
@@ -104,8 +111,7 @@ class KirimiClient {
       );
 
     try {
-      final streamedResponse =
-          await request.send().timeout(timeout);
+      final streamedResponse = await _http.send(request).timeout(timeout);
       final response = await http.Response.fromStream(streamedResponse);
       return _handleResponse(response);
     } on KirimiException {
@@ -122,33 +128,45 @@ class KirimiClient {
   /// Send a text/media message to a single recipient.
   Future<KirimiResponse> sendMessage({
     required String deviceId,
-    required String phone,
+    required String receiver,
     required String message,
     String? mediaUrl,
+    String? fileName,
+    bool? enableTypingEffect,
+    int? typingSpeedMs,
+    String? quotedMessageId,
   }) {
     return _post('/v1/send-message', {
       'device_id': deviceId,
-      'phone': phone,
+      'receiver': receiver,
       'message': message,
       if (mediaUrl != null) 'media_url': mediaUrl,
+      if (fileName != null) 'fileName': fileName,
+      if (enableTypingEffect != null) 'enableTypingEffect': enableTypingEffect,
+      if (typingSpeedMs != null) 'typingSpeedMs': typingSpeedMs,
+      if (quotedMessageId != null) 'quotedMessageId': quotedMessageId,
     });
   }
 
   /// Send a message with a file attachment via multipart/form-data (max 50 MB).
   Future<KirimiResponse> sendMessageFile({
     required String deviceId,
-    required String phone,
+    required String receiver,
     required List<int> fileBytes,
     required String fileName,
     String? message,
+    String? caption,
+    String? quotedMessageId,
   }) {
     return _postMultipart(
       '/v1/send-message-file',
       {
         'device_id': deviceId,
-        'phone': phone,
-        if (message != null) 'message': message,
+        'receiver': receiver,
         'fileName': fileName,
+        if (message != null) 'message': message,
+        if (caption != null) 'caption': caption,
+        if (quotedMessageId != null) 'quotedMessageId': quotedMessageId,
       },
       fileBytes,
       fileName,
@@ -158,15 +176,52 @@ class KirimiClient {
   /// Send a message instantly (no typing effect).
   Future<KirimiResponse> sendMessageFast({
     required String deviceId,
-    required String phone,
+    required String receiver,
     required String message,
     String? mediaUrl,
+    String? fileName,
+    String? quotedMessageId,
   }) {
     return _post('/v1/send-message-fast', {
       'device_id': deviceId,
-      'phone': phone,
+      'receiver': receiver,
       'message': message,
       if (mediaUrl != null) 'media_url': mediaUrl,
+      if (fileName != null) 'fileName': fileName,
+      if (quotedMessageId != null) 'quotedMessageId': quotedMessageId,
+    });
+  }
+
+  /// Broadcast a message to multiple recipients.
+  ///
+  /// [numbers] is sent as a JSON array. Max 1000 numbers per request.
+  Future<KirimiResponse> broadcastMessage({
+    required String deviceId,
+    required String label,
+    required List<String> numbers,
+    required String message,
+    int? delay,
+    int? delayMin,
+    int? delayMax,
+    String? mediaUrl,
+    String? fileName,
+    String? startedAt,
+    bool? enableTypingEffect,
+    int? typingSpeedMs,
+  }) {
+    return _post('/v1/broadcast-message', {
+      'device_id': deviceId,
+      'label': label,
+      'numbers': numbers,
+      'message': message,
+      if (delay != null) 'delay': delay,
+      if (delayMin != null) 'delayMin': delayMin,
+      if (delayMax != null) 'delayMax': delayMax,
+      if (mediaUrl != null) 'media_url': mediaUrl,
+      if (fileName != null) 'fileName': fileName,
+      if (startedAt != null) 'started_at': startedAt,
+      if (enableTypingEffect != null) 'enableTypingEffect': enableTypingEffect,
+      if (typingSpeedMs != null) 'typingSpeedMs': typingSpeedMs,
     });
   }
 
@@ -174,16 +229,79 @@ class KirimiClient {
   // WABA
   // ---------------------------------------------------------------------------
 
-  /// Send a message via WhatsApp Business API (Meta Cloud API).
+  /// Send a Meta-approved template via WhatsApp Business API.
+  ///
+  /// Uses `waba_id`, never `device_id`.
   Future<KirimiResponse> sendWabaMessage({
-    required String deviceId,
-    required String phone,
-    required String message,
+    required String wabaId,
+    required String to,
+    required String templateName,
+    List<String>? variables,
+    WabaTemplateHeader? header,
+    List<dynamic>? buttons,
   }) {
     return _post('/v1/waba/send-message', {
-      'device_id': deviceId,
-      'phone': phone,
+      'waba_id': wabaId,
+      'to': to,
+      'template_name': templateName,
+      if (variables != null) 'variables': variables,
+      if (header != null) 'header': header.toJson(),
+      if (buttons != null) 'buttons': buttons,
+    });
+  }
+
+  /// Send a free-form reply inside the 24h customer service window.
+  ///
+  /// [message] follows the Meta shape, e.g.
+  /// `{'type': 'text', 'text': 'halo'}`.
+  Future<KirimiResponse> wabaReply({
+    required String wabaId,
+    required String to,
+    required Map<String, dynamic> message,
+  }) {
+    return _post('/v1/waba/messages/reply', {
+      'waba_id': wabaId,
+      'to': to,
       'message': message,
+    });
+  }
+
+  /// List conversations still inside the 24h customer service window.
+  Future<KirimiResponse> wabaConversations({int? limit, int? page}) {
+    return _post('/v1/waba/conversations', {
+      if (limit != null) 'limit': limit,
+      if (page != null) 'page': page,
+    });
+  }
+
+  /// Refresh template status from Meta for one WABA.
+  Future<KirimiResponse> wabaTemplatesSync({required String wabaId}) {
+    return _post('/v1/waba/templates/sync', {'waba_id': wabaId});
+  }
+
+  /// Send an OTP through your own WABA + AUTHENTICATION template.
+  Future<KirimiResponse> wabaSendOtp({
+    required String wabaId,
+    required String to,
+    required String templateName,
+  }) {
+    return _post('/v1/waba/send-otp', {
+      'waba_id': wabaId,
+      'to': to,
+      'template_name': templateName,
+    });
+  }
+
+  /// Verify an OTP previously sent through [wabaSendOtp].
+  Future<KirimiResponse> wabaVerifyOtp({
+    required String wabaId,
+    required String to,
+    required String otpCode,
+  }) {
+    return _post('/v1/waba/verify-otp', {
+      'waba_id': wabaId,
+      'to': to,
+      'otp_code': otpCode,
     });
   }
 
@@ -191,9 +309,41 @@ class KirimiClient {
   // Devices
   // ---------------------------------------------------------------------------
 
+  /// Create a new device for a package.
+  Future<KirimiResponse> createDevice({
+    required dynamic packageId,
+    String? voucherCode,
+  }) {
+    return _post('/v1/create-device', {
+      'package_id': packageId,
+      if (voucherCode != null) 'voucher_code': voucherCode,
+    });
+  }
+
+  /// Connect a device and obtain its QR/session state.
+  Future<KirimiResponse> connectDevice({required String deviceId}) {
+    return _post('/v1/connect-device', {'device_id': deviceId});
+  }
+
+  /// Renew a device subscription.
+  Future<KirimiResponse> renewDevice({
+    required String deviceId,
+    required dynamic packageId,
+    String? voucherCode,
+  }) {
+    return _post('/v1/renew-device', {
+      'device_id': deviceId,
+      'package_id': packageId,
+      if (voucherCode != null) 'voucher_code': voucherCode,
+    });
+  }
+
   /// List all registered devices.
-  Future<KirimiResponse> listDevices() {
-    return _post('/v1/list-devices', {});
+  Future<KirimiResponse> listDevices({int? page, int? limit}) {
+    return _post('/v1/list-devices', {
+      if (page != null) 'page': page,
+      if (limit != null) 'limit': limit,
+    });
   }
 
   /// Get connection status for a device.
@@ -219,21 +369,32 @@ class KirimiClient {
   // Contacts
   // ---------------------------------------------------------------------------
 
-  /// Save a contact to the account.
+  /// Save a contact to the account. Existing numbers are skipped.
   Future<KirimiResponse> saveContact({
-    required String phone,
-    String? name,
-    String? email,
+    required String nama,
+    required String nomor,
+    String? deviceId,
   }) {
     return _post('/v1/save-contact', {
-      'phone': phone,
-      if (name != null) 'name': name,
-      if (email != null) 'email': email,
+      'nama': nama,
+      'nomor': nomor,
+      if (deviceId != null) 'device_id': deviceId,
+    });
+  }
+
+  /// Save up to 1000 contacts in one request.
+  Future<KirimiResponse> saveContactsBulk({
+    required List<BulkContact> contacts,
+    String? deviceId,
+  }) {
+    return _post('/v1/save-contacts-bulk', {
+      'contacts': contacts.map((c) => c.toJson()).toList(),
+      if (deviceId != null) 'device_id': deviceId,
     });
   }
 
   // ---------------------------------------------------------------------------
-  // OTP
+  // OTP v1
   // ---------------------------------------------------------------------------
 
   /// Generate and send an OTP via a WhatsApp device.
@@ -242,14 +403,20 @@ class KirimiClient {
     required String phone,
     int? otpLength,
     String? otpType,
+    String? customOtpText,
     String? customOtpMessage,
+    bool? enableTypingEffect,
+    int? typingSpeedMs,
   }) {
     return _post('/v1/generate-otp', {
       'device_id': deviceId,
       'phone': phone,
       if (otpLength != null) 'otp_length': otpLength,
       if (otpType != null) 'otp_type': otpType,
+      if (customOtpText != null) 'customOtpText': customOtpText,
       if (customOtpMessage != null) 'customOtpMessage': customOtpMessage,
+      if (enableTypingEffect != null) 'enableTypingEffect': enableTypingEffect,
+      if (typingSpeedMs != null) 'typingSpeedMs': typingSpeedMs,
     });
   }
 
@@ -266,21 +433,31 @@ class KirimiClient {
     });
   }
 
-  /// Send OTP via WABA template or device (v2).
+  // ---------------------------------------------------------------------------
+  // OTP v2
+  // ---------------------------------------------------------------------------
+
+  /// Send an OTP via the Kirimi provider, your own device, or your own WABA.
+  ///
+  /// [method] is one of `whatsapp` (alias `waba`), `device`, or `waba_user`.
+  /// - `device` requires [deviceId] and a [customMessage] containing `{{otp}}`.
+  /// - `waba_user` requires [wabaId] and [templateName].
   Future<KirimiResponse> sendOtpV2({
     required String phone,
-    required String deviceId,
     String? method,
     String? appName,
-    String? templateCode,
+    String? deviceId,
+    String? wabaId,
+    String? templateName,
     String? customMessage,
   }) {
     return _post('/v2/otp/send', {
       'phone': phone,
-      'device_id': deviceId,
       if (method != null) 'method': method,
       if (appName != null) 'app_name': appName,
-      if (templateCode != null) 'template_code': templateCode,
+      if (deviceId != null) 'device_id': deviceId,
+      if (wabaId != null) 'waba_id': wabaId,
+      if (templateName != null) 'template_name': templateName,
       if (customMessage != null) 'custom_message': customMessage,
     });
   }
@@ -297,49 +474,70 @@ class KirimiClient {
   }
 
   // ---------------------------------------------------------------------------
-  // Broadcast
+  // OTP Reverse
   // ---------------------------------------------------------------------------
 
-  /// Broadcast a message to multiple recipients.
-  ///
-  /// [phones] can be a comma-separated [String] or a [List<String>].
-  Future<KirimiResponse> broadcastMessage({
+  /// Create a reverse OTP token and the message the customer must send back.
+  Future<KirimiResponse> otpReverseCreate({
+    required String phone,
     required String deviceId,
-    required dynamic phones,
-    required String message,
-    int? delay,
+    String? appName,
+    String? callbackUrl,
+    String? customMessage,
+    String? successMessage,
+    String? failureMessage,
   }) {
-    final String phonesStr;
-    if (phones is List<String>) {
-      phonesStr = phones.join(',');
-    } else if (phones is String) {
-      phonesStr = phones;
-    } else {
-      throw ArgumentError('phones must be a String or List<String>');
-    }
-
-    return _post('/v1/broadcast-message', {
+    return _post('/v2/otp-reverse/create', {
+      'phone': phone,
       'device_id': deviceId,
-      'phones': phonesStr,
-      'message': message,
-      if (delay != null) 'delay': delay,
+      if (appName != null) 'app_name': appName,
+      if (callbackUrl != null) 'callback_url': callbackUrl,
+      if (customMessage != null) 'custom_message': customMessage,
+      if (successMessage != null) 'success_message': successMessage,
+      if (failureMessage != null) 'failure_message': failureMessage,
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // Deposits
-  // ---------------------------------------------------------------------------
-
-  /// List deposits. Optionally filter by [status] (paid, unpaid, expired).
-  Future<KirimiResponse> listDeposits({String? status}) {
-    return _post('/v1/list-deposits', {
-      if (status != null) 'status': status,
-    });
+  /// Check the status of a reverse OTP token.
+  Future<KirimiResponse> otpReverseStatus({required String token}) {
+    return _post('/v2/otp-reverse/status', {'token': token});
   }
+
+  // ---------------------------------------------------------------------------
+  // Packages & Deposits
+  // ---------------------------------------------------------------------------
 
   /// List available packages.
   Future<KirimiResponse> listPackages() {
     return _post('/v1/list-packages', {});
+  }
+
+  /// Create a deposit payment link. [nominal] minimum is 100.
+  Future<KirimiResponse> createDeposit({required num nominal}) {
+    return _post('/v1/create-deposit', {'nominal': nominal});
+  }
+
+  /// Check a deposit's status by [ref].
+  Future<KirimiResponse> depositStatus({required String ref}) {
+    return _post('/v1/deposit-status', {'ref': ref});
+  }
+
+  /// Cancel an unpaid deposit by [ref].
+  Future<KirimiResponse> cancelDeposit({required String ref}) {
+    return _post('/v1/cancel-deposit', {'ref': ref});
+  }
+
+  /// List deposits, optionally filtered by [status].
+  Future<KirimiResponse> listDeposits({
+    int? page,
+    int? limit,
+    String? status,
+  }) {
+    return _post('/v1/list-deposits', {
+      if (page != null) 'page': page,
+      if (limit != null) 'limit': limit,
+      if (status != null) 'status': status,
+    });
   }
 
   // ---------------------------------------------------------------------------

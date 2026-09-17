@@ -10,12 +10,12 @@ Official Dart/Flutter SDK for [Kirimi](https://kirimi.id) WhatsApp API.
 - Send WhatsApp text and media messages
 - Send messages via file upload (multipart)
 - Fast message sending (no typing effect)
-- WhatsApp Business API (WABA) support
-- OTP generation and validation (v1 & v2)
-- Device management
 - Broadcast to multiple recipients
-- Contact saving
-- Deposit and package listing
+- WhatsApp Business API (WABA): templates, replies, conversations, OTP
+- OTP (v1, v2, and reverse)
+- Device management (create, connect, renew, status)
+- Contact saving (single and bulk)
+- Packages and deposits
 - Null-safe, pure Dart — works on Flutter, server-side Dart, and web
 
 ## Installation
@@ -35,93 +35,130 @@ flutter pub add kirimi
 
 ## Quick Start
 
-### Flutter
-
 ```dart
 import 'package:kirimi/kirimi.dart';
 
-class MyService {
-  final _client = KirimiClient(
-    userCode: 'YOUR_USER_CODE',
-    secret: 'YOUR_SECRET',
-  );
+final client = KirimiClient(
+  userCode: 'YOUR_USER_CODE',
+  secret: 'YOUR_SECRET',
+);
 
-  Future<void> sendWelcome(String phone) async {
-    final resp = await _client.sendMessage(
-      deviceId: 'YOUR_DEVICE_ID',
-      phone: phone,
-      message: 'Welcome!',
-    );
-    print(resp.success); // true
-  }
+final resp = await client.sendMessage(
+  deviceId: 'YOUR_DEVICE_ID',
+  receiver: '6281234567890', // country code, no '+'
+  message: 'Welcome!',
+);
+print(resp.success); // true
 
-  void dispose() => _client.close();
-}
+client.close();
 ```
 
-### Server-side Dart
+## Authentication
 
-```dart
-import 'package:kirimi/kirimi.dart';
-
-Future<void> main() async {
-  final client = KirimiClient(
-    userCode: 'YOUR_USER_CODE',
-    secret: 'YOUR_SECRET',
-  );
-
-  final resp = await client.userInfo();
-  print(resp.data);
-
-  client.close();
-}
-```
+`user_code` and `secret` travel **in the request body** on every endpoint — not as a header.
 
 ## All Methods
 
 ### WhatsApp Messaging
 
 ```dart
-// Send text or media message
+// Send a text or media message
 await client.sendMessage(
   deviceId: 'DEV_ID',
-  phone: '6281234567890',
+  receiver: '6281234567890',
   message: 'Hello!',
-  mediaUrl: 'https://...', // optional
+  mediaUrl: 'https://...',        // optional
+  fileName: 'image.jpg',          // optional
+  enableTypingEffect: true,       // optional, default true server-side
+  typingSpeedMs: 350,             // optional, 100–800
+  quotedMessageId: 'MSG_ID',      // optional
 );
 
 // Send with file upload (max 50 MB)
 final bytes = await File('doc.pdf').readAsBytes();
 await client.sendMessageFile(
   deviceId: 'DEV_ID',
-  phone: '6281234567890',
+  receiver: '6281234567890',
   fileBytes: bytes,
   fileName: 'doc.pdf',
   message: 'See attachment', // optional
+  caption: 'A document',     // optional
 );
 
-// Send without typing effect
+// Send without the typing effect
 await client.sendMessageFast(
   deviceId: 'DEV_ID',
-  phone: '6281234567890',
+  receiver: '6281234567890',
   message: 'Instant!',
+);
+```
+
+### Broadcast
+
+`numbers` is sent as a JSON **array** and `label` is required.
+
+```dart
+await client.broadcastMessage(
+  deviceId: 'DEV_ID',
+  label: 'promo-juli',                        // required, max 100 chars
+  numbers: ['628111', '628222', '628333'],    // required, max 1000
+  message: 'Promo hari ini!',
+  delay: 30,                                  // optional, clamped 30–3600
+  startedAt: '2026-01-01T00:00:00Z',          // optional, ISO 8601
 );
 ```
 
 ### WABA
 
+WABA endpoints use `waba_id`, never `device_id`.
+
 ```dart
+// Send a Meta-approved template
 await client.sendWabaMessage(
-  deviceId: 'DEV_ID',
-  phone: '6281234567890',
-  message: 'WABA message',
+  wabaId: 'WABA_ID',
+  to: '6281234567890',
+  templateName: 'hello_world',
+  variables: ['Andi', '12345'],  // optional
+  header: WabaTemplateHeader(    // optional
+    type: 'document',
+    link: 'https://example.com/doc.pdf',
+    filename: 'doc.pdf',
+  ),
+);
+
+// Free-form reply (only inside the 24h customer service window)
+await client.wabaReply(
+  wabaId: 'WABA_ID',
+  to: '6281234567890',
+  message: WabaReplyMessage.text('Halo!').toJson(),
+);
+
+// List conversations inside the 24h window
+await client.wabaConversations(limit: 50, page: 1);
+
+// Refresh template status from Meta
+await client.wabaTemplatesSync(wabaId: 'WABA_ID');
+
+// OTP through your own WABA + AUTHENTICATION template
+await client.wabaSendOtp(
+  wabaId: 'WABA_ID',
+  to: '6281234567890',
+  templateName: 'otp_auth',
+);
+await client.wabaVerifyOtp(
+  wabaId: 'WABA_ID',
+  to: '6281234567890',
+  otpCode: '123456',
 );
 ```
 
 ### Devices
 
 ```dart
-await client.listDevices();
+await client.createDevice(packageId: 12, voucherCode: 'DISC10');
+await client.connectDevice(deviceId: 'DEV_ID');
+await client.renewDevice(deviceId: 'DEV_ID', packageId: 12);
+await client.listDevices(page: 1, limit: 10);
 await client.deviceStatus(deviceId: 'DEV_ID');
 await client.deviceStatusEnhanced(deviceId: 'DEV_ID');
 ```
@@ -136,63 +173,99 @@ await client.userInfo();
 
 ```dart
 await client.saveContact(
-  phone: '6281234567890',
-  name: 'John Doe',    // optional
-  email: 'j@doe.com', // optional
+  nama: 'John Doe',
+  nomor: '6281234567890',
+  deviceId: 'DEV_ID', // optional
+);
+
+// Save up to 1000 contacts at once
+await client.saveContactsBulk(
+  contacts: const [
+    BulkContact(nama: 'Andi', nomor: '628111'),
+    BulkContact(nama: 'Budi', nomor: '628222'),
+  ],
+  deviceId: 'DEV_ID', // optional
 );
 ```
 
-### OTP
+### OTP v1
 
 ```dart
-// Generate OTP (v1)
 await client.generateOtp(
   deviceId: 'DEV_ID',
   phone: '6281234567890',
-  otpLength: 6,         // optional
-  otpType: 'numeric',   // optional: numeric | alphabetic | alphanumeric
-  customOtpMessage: 'Your code is {otp}', // optional
+  otpLength: 6,                             // optional, 4–20, default 8
+  otpType: 'numeric',                       // optional: numeric | alphabetic | alphanumeric
+  customOtpText: 'Kode Anda',               // optional, max 20
+  customOtpMessage: 'Your code is {otp}',   // optional, must contain {otp}
 );
 
-// Validate OTP (v1)
 await client.validateOtp(
   deviceId: 'DEV_ID',
   phone: '6281234567890',
   otp: '123456',
 );
+```
 
-// Send OTP (v2)
+### OTP v2
+
+`method` is one of `whatsapp` (alias `waba`), `device`, or `waba_user`.
+
+```dart
+// Kirimi provider — Rp 595 per delivered OTP
 await client.sendOtpV2(
   phone: '6281234567890',
-  deviceId: 'DEV_ID',
-  method: 'device',    // optional: device | waba
-  appName: 'MyApp',    // optional
+  method: 'whatsapp',
+  appName: 'MyApp', // optional
 );
 
-// Verify OTP (v2)
+// Your own connected device — free
+await client.sendOtpV2(
+  phone: '6281234567890',
+  method: 'device',
+  deviceId: 'DEV_ID',
+  customMessage: 'Kode: {{otp}}', // must contain {{otp}}, 10–500 chars
+);
+
+// Your own WABA — free
+await client.sendOtpV2(
+  phone: '6281234567890',
+  method: 'waba_user',
+  wabaId: 'WABA_ID',
+  templateName: 'otp_auth',
+);
+
 await client.verifyOtpV2(
   phone: '6281234567890',
   otpCode: '123456',
 );
 ```
 
-### Broadcast
+### OTP Reverse
 
 ```dart
-// Pass a list or a comma-separated string
-await client.broadcastMessage(
+final created = await client.otpReverseCreate(
+  phone: '6281234567890',
   deviceId: 'DEV_ID',
-  phones: ['628111', '628222', '628333'],
-  message: 'Promo hari ini!',
-  delay: 2, // optional, seconds between messages
+  appName: 'MyApp',                          // optional
+  callbackUrl: 'https://example.com/cb',     // optional, max 500
+  customMessage: 'Kirim {{token}} dari {{phone}}', // optional, 20–500
+  successMessage: 'Terima kasih',
+  failureMessage: 'Gagal',
 );
+
+// Status: pending | verified | phone_mismatch | expired (token valid 10 min, single use)
+await client.otpReverseStatus(token: 'TOKEN');
 ```
 
 ### Deposits & Packages
 
 ```dart
-await client.listDeposits(status: 'paid'); // optional filter
 await client.listPackages();
+await client.createDeposit(nominal: 50000);           // min 100
+await client.depositStatus(ref: 'REF');
+await client.cancelDeposit(ref: 'REF');               // must be unpaid
+await client.listDeposits(page: 1, limit: 10, status: 'paid');
 ```
 
 ## Error Handling
@@ -201,7 +274,7 @@ await client.listPackages();
 try {
   final resp = await client.sendMessage(
     deviceId: 'DEV',
-    phone: '628xxx',
+    receiver: '628xxx',
     message: 'hi',
   );
   print(resp.data);
@@ -218,6 +291,10 @@ try {
 }
 ```
 
+HTTP status codes: `400` invalid params · `401` wrong secret · `402` insufficient balance ·
+`403` feature not in package · `404` not found · `429` rate limited · `500` server error ·
+`502` number undeliverable · `503` provider outage.
+
 ## Constructor Options
 
 ```dart
@@ -228,6 +305,18 @@ KirimiClient({
   Duration timeout = const Duration(seconds: 30),
   http.Client? httpClient,                       // inject custom client
 });
+```
+
+## Response Envelope
+
+Every method returns `KirimiResponse`, never an unwrapped payload:
+
+```dart
+class KirimiResponse {
+  final bool success;
+  final dynamic data;
+  final String? message;
+}
 ```
 
 ## License
