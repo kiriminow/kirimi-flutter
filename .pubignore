@@ -1,0 +1,21 @@
+# Mirrors .gitignore (a .pubignore replaces it for `dart pub publish`) plus
+# repo-only files that should not ship in the published package.
+
+# Dart/Flutter
+.dart_tool/
+.packages
+pubspec.lock
+build/
+doc/api/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Repo-only docs
+API-ALIGNMENT.md
