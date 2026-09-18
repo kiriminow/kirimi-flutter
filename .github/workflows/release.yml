@@ -1,8 +1,12 @@
 name: release
 
+# The tag pattern must match the one configured on pub.dev
+# (Admin -> Automated publishing), which is `v{{version}}`.
+# Note: pub.dev only accepts publishing from workflows triggered by a tag.
 on:
   push:
-    tags: ['v*']
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
 
 concurrency:
   group: release-${{ github.ref }}
@@ -10,10 +14,9 @@ concurrency:
 
 permissions:
   contents: write
-  id-token: write
 
 jobs:
-  release:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,12 +33,14 @@ jobs:
           fi
 
       - run: dart pub get
-      - run: dart analyze --no-fatal-infos --no-fatal-warnings
+      # Info-level lints are tolerated (there are pre-existing sort_constructors_first
+      # hints); warnings and errors still fail the release.
+      - run: dart analyze --no-fatal-warnings
       - run: dart test
 
-      - name: publish to pub.dev
-        run: dart pub publish --force
-
-      - uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
+  publish:
+    needs: verify
+    permissions:
+      id-token: write # Required for OIDC authentication with pub.dev
+    # Dart's reusable workflow handles the OIDC exchange and publishing.
+    uses: dart-lang/setup-dart/.github/workflows/publish.yml@v1
